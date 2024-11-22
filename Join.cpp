@@ -12,17 +12,18 @@ vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
                          pair<uint, uint> right_rel) {
 	
 	vector<Bucket> partitions(MEM_SIZE_IN_PAGE - 1, Bucket(disk)); 
+	// No of partitions = number of pages in memory - 1, cause 1 is for input page.
 
 	for(uint i = left_rel.first; i < left_rel.second; ++i){
-		mem->loadFromDisk(disk, i, MEM_SIZE_IN_PAGE - 1);
+		mem->loadFromDisk(disk, i, MEM_SIZE_IN_PAGE - 1); 
 		Page* curPage = mem->mem_page(MEM_SIZE_IN_PAGE - 1);
 
-		for(uint j = 0; j < curPage->size(); ++j){
+		for(uint j = 0; j < curPage->size(); ++j){ 
 			uint h = curPage->get_record(j).partition_hash();
-			uint h1 = h%MEM_SIZE_IN_PAGE - 1;
-			Page* memPage = mem->mem_page(h1);
+			uint h1 = h%(MEM_SIZE_IN_PAGE - 1);
+			Page* memPage = mem->mem_page(h1); // page id of the mem page that the tuple got inserted into
 
-			memPage->loadRecord(curPage->get_record(j));
+			memPage->loadRecord(curPage->get_record(j));  
 
 			if(memPage->full()){
 				partitions[h1].add_left_rel_page(mem->flushToDisk(disk, h1));
@@ -32,7 +33,7 @@ vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
 
 	}
 	for(uint i = 0; i < partitions.size(); ++i){
-		if(!mem->mem_page(i)->empty()){
+		if(!(mem->mem_page(i)->empty())){
 			partitions[i].add_left_rel_page(mem->flushToDisk(disk, i));
 		}
 	}
@@ -45,7 +46,7 @@ vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
 
 		for(uint j = 0; j < curPage->size(); ++j){
 			uint h = curPage->get_record(j).partition_hash();
-			uint h1 = h%MEM_SIZE_IN_PAGE - 1;
+			uint h1 = h%(MEM_SIZE_IN_PAGE - 1);
 			Page* memPage = mem->mem_page(h1);
 
 			memPage->loadRecord(curPage->get_record(j));
@@ -58,7 +59,7 @@ vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
 
 	}
 	for(uint i = 0; i < partitions.size(); ++i){
-		if(!mem->mem_page(i)->empty()){
+		if(!(mem->mem_page(i)->empty())){
 			partitions[i].add_right_rel_page(mem->flushToDisk(disk, i));
 		}
 	}
@@ -77,16 +78,45 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 	vector<uint> larger;
 	vector<uint> smaller;
 
+	uint leftSize = 0;
+	uint rightSize = 0;
+
+	bool leftLarger = false;
+
 	vector<uint> disk_pages;
 
-	for(uint i = 0; i < MEM_SIZE_IN_PAGE - 2; ++i){
-		if(partitions[i].num_left_rel_record >= partitions[i].num_right_rel_record){
+	for(uint i = 0; i < MEM_SIZE_IN_PAGE - 1; ++i){
+		leftSize += partitions[i].num_left_rel_record;
+		rightSize += partitions[i].num_right_rel_record;
+	}
+
+	if(leftSize >= rightSize){
+		leftLarger = true;
+	}
+
+	// TODO: check if its -1 or -2
+	for(uint i = 0; i < MEM_SIZE_IN_PAGE - 1; ++i){
+
+		if(leftLarger){
 			larger = partitions[i].get_left_rel();
 			smaller = partitions[i].get_right_rel();
 		}
 		else{
 			larger = partitions[i].get_right_rel();
 			smaller = partitions[i].get_left_rel();
+		}
+		for(uint j = 0; j < smaller.size(); ++j){
+			mem->loadFromDisk(disk, smaller[j], MEM_SIZE_IN_PAGE - 2);
+			Page* curPage = mem->mem_page(MEM_SIZE_IN_PAGE - 2);
+
+			for(uint k = 0; k < curPage->size(); ++k){
+				uint h = curPage->get_record(k).probe_hash();
+				uint h2 = h%(MEM_SIZE_IN_PAGE - 2);
+				Page* memPage = mem->mem_page(h2);
+
+				memPage->loadRecord(curPage->get_record(k));
+			}
+			curPage->reset();
 		}
 
 		for(uint j = 0; j < larger.size(); ++j){
@@ -95,27 +125,13 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 
 			for(uint k = 0; k < curPage->size(); ++k){
 				uint h = curPage->get_record(k).probe_hash();
-				uint h2 = h%MEM_SIZE_IN_PAGE - 2;
-				Page* memPage = mem->mem_page(h2);
-
-				memPage->loadRecord(curPage->get_record(k));
-			}
-			curPage->reset();
-		}
-
-		for(uint j = 0; j < smaller.size(); ++j){
-			mem->loadFromDisk(disk, smaller[j], MEM_SIZE_IN_PAGE - 2);
-			Page* curPage = mem->mem_page(MEM_SIZE_IN_PAGE - 2);
-
-			for(uint k = 0; k < curPage->size(); ++k){
-				uint h = curPage->get_record(k).probe_hash();
-				uint h2 = h%MEM_SIZE_IN_PAGE - 2;
+				uint h2 = h%(MEM_SIZE_IN_PAGE - 2);
 				Page* memPage = mem->mem_page(h2);
 
 				for(uint l = 0; l < memPage->size(); ++l){
 					if(memPage->get_record(l) == curPage->get_record(k)){
 						Page* outPage = mem->mem_page(MEM_SIZE_IN_PAGE - 1);
-						outPage->loadPair(memPage->get_record(l), curPage->get_record(k));
+						outPage->loadPair(curPage->get_record(k), memPage->get_record(l));
 
 						if(outPage->full()){
 							disk_pages.push_back(mem->flushToDisk(disk, MEM_SIZE_IN_PAGE - 1));
@@ -125,6 +141,11 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 			}
 			curPage->reset();
 		}
+	
+		for(uint i = 0; i < MEM_SIZE_IN_PAGE - 1; ++i){
+			mem->mem_page(i)->reset();
+		}
+
 	}
 
 	if(!mem->mem_page(MEM_SIZE_IN_PAGE - 1)->empty()){
